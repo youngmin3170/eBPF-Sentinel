@@ -1,4 +1,7 @@
 # eBPF-Sentinel
+currently working on to add features. README.md is not correct. 
+
+## eBPF-Sentinel
 
 A lightweight, kernel-level Linux security agent that uses eBPF for real-time syscall telemetry and a PyTorch LSTM to autonomously detect and terminate malicious processes — ransomware, reverse shells, and fork bombs — with sub-millisecond inference latency and near-zero false positives.
 
