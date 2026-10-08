@@ -15,6 +15,7 @@
 #include <sys/un.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include <limits.h>
 
 #define SYSCALL_EXECVE 1
 #define SYSCALL_OPENAT 2
@@ -102,6 +103,37 @@ static int setup_unix_socket(void)
 	return fd;
 }
 
+static int get_sensor_path(char *sensor_path, size_t size)
+{
+    char exe_path[PATH_MAX];
+
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+
+    if (len < 0) {
+        perror("readlink");
+        return -1;
+    }
+
+    exe_path[len] = '\0';
+
+    char *last_slash = strrchr(exe_path, '/');
+    if (!last_slash) {
+        fprintf(stderr, "ERROR: failed to determine executable directory\n");
+        return -1;
+    }
+
+    *last_slash = '\0';
+
+    int written = snprintf(sensor_path, size, "%s/sensor.o", exe_path);
+
+    if (written < 0 || (size_t)written >= size) {
+        fprintf(stderr, "ERROR: sensor.o path is too long\n");
+        return -1;
+    }
+
+    return 0;
+}
+
 static struct bpf_link *attach_prog(struct bpf_object *obj, const char *name)
 {
 	struct bpf_program *prog = bpf_object__find_program_by_name(obj, name);
@@ -122,13 +154,20 @@ int main(void)
 	signal(SIGINT,  handle_signal);
 	signal(SIGTERM, handle_signal);
 
-	struct bpf_object *obj = bpf_object__open_file("sensor.o", NULL);
-	if (libbpf_get_error(obj)) {
-		fprintf(stderr, "ERROR: failed to open sensor.o\n");
+	char sensor_path[PATH_MAX];
+
+	if (get_sensor_path(sensor_path, sizeof(sensor_path)) < 0) {
 		return 1;
 	}
+		
+
+	struct bpf_object *obj = bpf_object__open_file(sensor_path, NULL);
+	if (libbpf_get_error(obj)) {
+    fprintf(stderr, "ERROR: failed to open %s\n", sensor_path);
+    return 1;
+}
 	if (bpf_object__load(obj)) {
-		fprintf(stderr, "ERROR: kernel verifier rejected sensor.o\n");
+		fprintf(stderr, "ERROR: kernel verifier rejected %s\n", sensor_path);
 		return 1;
 	}
 
