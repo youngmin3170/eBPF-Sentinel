@@ -115,7 +115,10 @@ int trace_openat(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 	}
 
+	__builtin_memset(&e->data, 0, sizeof(e->data));
+
 	fill_common(e, EVENT_OPENAT);
+	
 	__builtin_memcpy(e->comm, comm, sizeof(e->comm));
 	bpf_probe_read_user_str(e->data.file.filename, sizeof(e->data.file.filename), (void *)ctx->args[1]);
 	bpf_ringbuf_submit(e, 0);
@@ -138,6 +141,9 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx)
 	if (!e) {
 		return 0;
 	}
+
+	__builtin_memset(&e->data, 0, sizeof(e->data));
+
 
 	fill_common(e, EVENT_CONNECT);
 	__builtin_memcpy(e->comm, comm, sizeof(e->comm));
