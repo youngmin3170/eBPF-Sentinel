@@ -10,11 +10,6 @@
  * an "ip:port" string for connect events, which keeps the ML token
  * vocabulary small and consistent across syscall types.
  *
- * The is_noisy_comm() function filters out processes that trigger syscalls at
- * such a high rate with no threat signal that they would overwhelm the ring
- * buffer and ML engine.  This is a simple heuristic based on observed data;
- * it can be expanded or made more sophisticated as needed.
- *
  * Note: this program must be compiled with clang's -target bpf option, not
  * regular x86_64.  The Makefile handles this automatically.
 */
@@ -33,17 +28,6 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } rb SEC(".maps");
 
-/* Processes that fire syscalls at extremely high rate with no threat signal.
- * Dropping them in the kernel saves ring-buffer bandwidth and user-space CPU. */
-static __always_inline bool is_noisy_comm(const char *comm)
-{
-	if (bpf_strncmp(comm, 16, "xfce4-panel-gen") == 0) return true;
-	if (bpf_strncmp(comm, 16, "wrapper-2.0") == 0) return true;
-	if (bpf_strncmp(comm, 16, "cpuUsage.sh") == 0) return true;
-	if (bpf_strncmp(comm, 16, "sh") == 0) return true;
-	if (bpf_strncmp(comm, 16, "node") == 0) return true;
-	return false;
-}
 
 static __always_inline void fill_common(struct event *e, u32 event_type)
 {	
@@ -95,9 +79,7 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 	char comm[16];
 	bpf_get_current_comm(comm, sizeof(comm));
 
-	if (is_noisy_comm(comm)) {
-		return 0;
-	}
+	
 
 	struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
 	if (!e) {
@@ -126,9 +108,7 @@ int trace_openat(struct trace_event_raw_sys_enter *ctx)
 {
 	char comm[16];
 	bpf_get_current_comm(comm, sizeof(comm));
-	if (is_noisy_comm(comm)) {
-		return 0;
-	}
+	
 
 	struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
 	if (!e) {
@@ -152,9 +132,7 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx)
 {
 	char comm[16];
 	bpf_get_current_comm(comm, sizeof(comm));
-	if (is_noisy_comm(comm)) {
-		return 0;
-	}
+	
 
 	struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
 	if (!e) {
@@ -192,9 +170,7 @@ int trace_execveat(struct trace_event_raw_sys_enter *ctx)
     char comm[COMM_LEN];
     bpf_get_current_comm(comm, sizeof(comm));
 
-    if (is_noisy_comm(comm)) {
-		return 0;
-	}
+    
         
 
     struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);

@@ -11,6 +11,7 @@ BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 -I$(KERNEL_DIR) -I$(INCLUDE
 CFLAGS := -Wall -Wextra -O2 -I$(INCLUDE_DIR) -I/usr/include/bpf
 LDFLAGS := -L/usr/lib/x86_64-linux-gnu -lbpf -lelf -lz
 
+EVENT_HEADER := $(INCLUDE_DIR)/event.h
 
 .PHONY: all clean run inspect test
 
@@ -27,12 +28,12 @@ $(BUILD_DIR)/vmlinux.h: | $(BUILD_DIR)
 	cp $@ $(KERNEL_DIR)/vmlinux.h
 
 # Compile sensor.c to BPF bytecode.
-$(BUILD_DIR)/sensor.o: $(KERNEL_DIR)/sensor.c $(BUILD_DIR)/vmlinux.h
+$(BUILD_DIR)/sensor.o: $(KERNEL_DIR)/sensor.c $(BUILD_DIR)/vmlinux.h $(EVENT_HEADER)
 	@echo "[*] Compiling sensor.c to sensor.o"
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 # Compile loader.c to native x86-64 binary.
-$(BUILD_DIR)/sentinel: loader.c
+$(BUILD_DIR)/sentinel: loader.c $(EVENT_HEADER)
 	@echo "[*] Compiling loader.c to sentinel"
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 

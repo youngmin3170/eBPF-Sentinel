@@ -78,7 +78,12 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 			type_str = "exit";
 			detail = "-";
 			break;
-
+		
+		case EVENT_PROCESS_FORK:
+			type_str = "fork";
+			detail = "-";
+			break;
+			
 		default:
 			type_str = "unknown";
 			detail = "?";
@@ -195,7 +200,8 @@ int main(void)
 	struct bpf_link *link_connect = attach_prog(obj, "trace_connect");
 	struct bpf_link *link_execveat = attach_prog(obj, "trace_execveat");
 	struct bpf_link *link_exit = attach_prog(obj, "trace_process_exit");
-	if (!link_execve || !link_openat || !link_connect || !link_execveat || !link_exit)
+	struct bpf_link *link_fork = attach_prog(obj, "trace_process_fork");
+	if (!link_execve || !link_openat || !link_connect || !link_execveat || !link_exit || !link_fork)
 		return 1;
 
 	int map_fd = bpf_object__find_map_fd_by_name(obj, RINGBUF_NAME);
@@ -231,6 +237,7 @@ int main(void)
 	bpf_link__destroy(link_connect);
 	bpf_link__destroy(link_execveat);
 	bpf_link__destroy(link_exit);
+	bpf_link__destroy(link_fork);
 	bpf_object__close(obj);
 
 	if (client_fd != -1)

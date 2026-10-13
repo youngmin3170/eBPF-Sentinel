@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 EVENT_EXECVE = 1
+
+EVENT_PROCESS_EXIT = 5
 EVENT_PROCESS_FORK = 6
+
 COMM_LEN = 16
 PATH_LEN = 64
 MAX_ARGS = 6
@@ -123,32 +126,48 @@ def test_execve_event():
         target_pid = target.pid
         target.wait()
 
-        matched_event = None
+        
+
+        fork_event = None
+        exec_event = None
+        exit_event = None
+
         deadline = time.time() + 3
 
         while time.time() < deadline:
             raw = recv_exact(client, EVENT_SIZE)
             event = Event.from_buffer_copy(raw)
 
-            if event.event_type == EVENT_EXECVE and event.pid == target_pid:
-                matched_event = event
+            if event.event_type == EVENT_PROCESS_FORK and event.pid == expected_ppid and event.data.process.child_pid == target_pid:
+                fork_event = event
+
+            elif event.event_type == EVENT_EXECVE and event.pid == target_pid:
+                exec_event = event
+
+            elif event.event_type == EVENT_PROCESS_EXIT and event.pid == target_pid:
+                exit_event = event
+
+            if fork_event is not None and exec_event is not None and exit_event is not None:
                 break
+        
+        assert fork_event is not None
+        assert exit_event is not None
 
-        assert matched_event is not None, (f"Did not receive execve event for PID {target_pid}")
-        assert matched_event.data.exec.argc == 2
+        assert exec_event is not None, (f"Did not receive execve event for PID {target_pid}")
+        assert exec_event.data.exec.argc == 2
 
-        arg0 = bytes(matched_event.data.exec.args[0]).split(b"\0", 1)[0]
-        arg1 = bytes(matched_event.data.exec.args[1]).split(b"\0", 1)[0]
+        arg0 = bytes(exec_event.data.exec.args[0]).split(b"\0", 1)[0]
+        arg1 = bytes(exec_event.data.exec.args[1]).split(b"\0", 1)[0]
 
         assert arg0 == b"/usr/bin/true"
         assert arg1 == b"sentinel-argv-test"
 
-        assert matched_event.ppid == expected_ppid, (
+        assert exec_event.ppid == expected_ppid, (
             f"Expected PPID {expected_ppid}, "
-            f"got {matched_event.ppid}"
+            f"got {exec_event.ppid}"
         )
 
-        assert matched_event.timestamp_ns > 0
+        assert exec_event.timestamp_ns > 0
 
     finally:
         if sentinel.poll() is None:
