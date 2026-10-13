@@ -22,20 +22,10 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
 
-#define SYSCALL_EXECVE 1
-#define SYSCALL_OPENAT 2
-#define SYSCALL_CONNECT 3
+#include "event.h"
 
-/* Event envelope sent to user-space via the ring buffer.
- * Must stay byte-for-byte identical to struct event in loader.c. */
-struct event {
-	u32 pid;
-	u32 uid;
-	u32 syscall_type;
-	char comm[16];
-	char filename[64];  // path for execve/openat; ip:port string for connect 
-};
 
 // 256 KB ring buffer — holds about 2900 events before backpressure kicks in. 
 struct {
@@ -55,12 +45,46 @@ static __always_inline bool is_noisy_comm(const char *comm)
 	return false;
 }
 
-static __always_inline void fill_common(struct event *e, u32 syscall_type)
+static __always_inline void fill_common(struct event *e, u32 event_type)
+{	
+	e->timestamp_ns = bpf_ktime_get_ns();
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    e->pid = pid_tgid >> 32;
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+
+    e->ppid = BPF_CORE_READ(task, real_parent, tgid);
+
+    e->uid = bpf_get_current_uid_gid();
+
+    e->event_type = event_type;
+
+    bpf_get_current_comm(&e->comm, sizeof(e->comm));
+}
+
+static __always_inline void fill_exec_args(struct event *e, const char *const *argv)
 {
-	u64 id = bpf_get_current_pid_tgid();
-	e->pid = id >> 32;
-	e->uid = bpf_get_current_uid_gid();
-	e->syscall_type = syscall_type;
+    e->data.exec.argc = 0;
+
+    #pragma unroll
+    for (int i = 0; i < MAX_ARGS; i++) {
+        const char *arg_ptr = NULL;
+
+        if (bpf_probe_read_user(&arg_ptr, sizeof(arg_ptr), &argv[i]) < 0) {
+            break;
+        }
+
+        if (!arg_ptr) {
+            break;
+        }
+
+        if (bpf_probe_read_user_str(e->data.exec.args[i], sizeof(e->data.exec.args[i]), arg_ptr) < 0) {
+            break;
+        }
+
+        e->data.exec.argc++;
+    }
 }
 
 /* Hook 1: execve - fires when any process launches a new binary.
@@ -79,11 +103,17 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 	if (!e) {
 		return 0;
 	}
+	__builtin_memset(&e->data, 0, sizeof(e->data));
 
-	fill_common(e, SYSCALL_EXECVE);
+
+	fill_common(e, EVENT_EXECVE);
 	__builtin_memcpy(e->comm, comm, sizeof(e->comm));
-	bpf_probe_read_user_str(e->filename, sizeof(e->filename),
-	                        (void *)ctx->args[0]);
+	bpf_probe_read_user_str(e->data.exec.filename, sizeof(e->data.exec.filename), (void *)ctx->args[0]);
+	
+	const char *const *argv = (const char *const *)ctx->args[1];
+	
+	fill_exec_args(e, argv);
+	
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -105,10 +135,9 @@ int trace_openat(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 	}
 
-	fill_common(e, SYSCALL_OPENAT);
+	fill_common(e, EVENT_OPENAT);
 	__builtin_memcpy(e->comm, comm, sizeof(e->comm));
-	bpf_probe_read_user_str(e->filename, sizeof(e->filename),
-	                        (void *)ctx->args[1]);
+	bpf_probe_read_user_str(e->data.file.filename, sizeof(e->data.file.filename), (void *)ctx->args[1]);
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -132,7 +161,7 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 	}
 
-	fill_common(e, SYSCALL_CONNECT);
+	fill_common(e, EVENT_CONNECT);
 	__builtin_memcpy(e->comm, comm, sizeof(e->comm));
 
 	/* Read the sockaddr from user space to extract ip:port.
@@ -146,15 +175,84 @@ int trace_connect(struct trace_event_raw_sys_enter *ctx)
 		/* Format: "ddd.ddd.ddd.ddd:ppppp\0" — fits in 64 bytes. */
 		u8 *b = (u8 *)&sa.sin_addr.s_addr;
 		u16 port = __builtin_bswap16(sa.sin_port);
-		BPF_SNPRINTF(e->filename, sizeof(e->filename),
+		BPF_SNPRINTF(e->data.network.address, sizeof(e->data.network.address),
 		             "%d.%d.%d.%d:%d",
 		             b[0], b[1], b[2], b[3], port);
 	} else {
-		__builtin_memcpy(e->filename, "?", 2);
+		__builtin_memcpy(e->data.network.address, "?", 2);
 	}
 
 	bpf_ringbuf_submit(e, 0);
 	return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_execveat")
+int trace_execveat(struct trace_event_raw_sys_enter *ctx)
+{
+    char comm[COMM_LEN];
+    bpf_get_current_comm(comm, sizeof(comm));
+
+    if (is_noisy_comm(comm)) {
+		return 0;
+	}
+        
+
+    struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return 0;
+	}
+
+    __builtin_memset(&e->data, 0, sizeof(e->data));
+
+    fill_common(e, EVENT_EXECVEAT);
+    __builtin_memcpy(e->comm, comm, sizeof(e->comm));
+
+    bpf_probe_read_user_str(e->data.exec.filename, sizeof(e->data.exec.filename), (void *)ctx->args[1]);
+
+    const char *const *argv = (const char *const *)ctx->args[2];
+
+    fill_exec_args(e, argv);
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("tracepoint/sched/sched_process_exit")
+int trace_process_exit(void *ctx)
+{
+    (void)ctx;
+
+    struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+		return 0;
+	}
+
+    __builtin_memset(&e->data, 0, sizeof(e->data));
+
+    fill_common(e, EVENT_PROCESS_EXIT);
+
+    bpf_ringbuf_submit(e, 0);
+
+    return 0;
+}
+
+SEC("tracepoint/sched/sched_process_fork")
+int trace_process_fork(struct trace_event_raw_sched_process_fork *ctx)
+{
+    struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+		return 0;
+	}
+
+    __builtin_memset(&e->data, 0, sizeof(e->data));
+
+    fill_common(e, EVENT_PROCESS_FORK);
+
+    e->pid = ctx->parent_pid;
+    e->data.process.child_pid = ctx->child_pid;
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

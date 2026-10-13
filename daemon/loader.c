@@ -16,23 +16,12 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include <limits.h>
-
-#define SYSCALL_EXECVE 1
-#define SYSCALL_OPENAT 2
-#define SYSCALL_CONNECT 3
+#include <linux/types.h>
+#include "event.h"
 
 #define SOCKET_PATH "/tmp/sentinel.sock"
 #define RINGBUF_NAME "rb"
 
-// Must be byte-for-byte identical to struct event in sensor.c.
-typedef uint32_t u32;
-struct event {
-	u32 pid;
-	u32 uid;
-	u32 syscall_type;
-	char comm[16];
-	char filename[64];
-};
 
 static int server_fd = -1;
 static int client_fd = -1;
@@ -61,13 +50,43 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 		return 0;
 	}
 
-	const char *type_str =
-	    (e->syscall_type == SYSCALL_EXECVE)  ? "execve"  :
-	    (e->syscall_type == SYSCALL_OPENAT)  ? "openat"  :
-	    (e->syscall_type == SYSCALL_CONNECT) ? "connect" : "unknown";
+	const char *type_str;
+	const char *detail;
 
-	printf("[%s] PID: %-6u | UID: %-4u | Comm: %-16s | %s\n",
-	       type_str, e->pid, e->uid, e->comm, e->filename);
+	switch (e->event_type) {
+		case EVENT_EXECVE:
+			type_str = "execve";
+			detail = e->data.exec.filename;
+			break;
+
+		case EVENT_OPENAT:
+			type_str = "openat";
+			detail = e->data.file.filename;
+			break;
+
+		case EVENT_CONNECT:
+			type_str = "connect";
+			detail = e->data.network.address;
+			break;
+		
+		case EVENT_EXECVEAT:
+			type_str = "execveat";
+			detail = e->data.exec.filename;
+			break;
+
+		case EVENT_PROCESS_EXIT:
+			type_str = "exit";
+			detail = "-";
+			break;
+
+		default:
+			type_str = "unknown";
+			detail = "?";
+			break;
+	}
+
+	printf("[%s] PID: %-6u | PPID: %-6u | UID: %-4u | Comm: %-16s | %s\n", type_str, e->pid, e->ppid, e->uid, e->comm, detail);
+
 	fflush(stdout);
 	return 0;
 }
@@ -174,7 +193,9 @@ int main(void)
 	struct bpf_link *link_execve  = attach_prog(obj, "trace_execve");
 	struct bpf_link *link_openat  = attach_prog(obj, "trace_openat");
 	struct bpf_link *link_connect = attach_prog(obj, "trace_connect");
-	if (!link_execve || !link_openat || !link_connect)
+	struct bpf_link *link_execveat = attach_prog(obj, "trace_execveat");
+	struct bpf_link *link_exit = attach_prog(obj, "trace_process_exit");
+	if (!link_execve || !link_openat || !link_connect || !link_execveat || !link_exit)
 		return 1;
 
 	int map_fd = bpf_object__find_map_fd_by_name(obj, RINGBUF_NAME);
@@ -208,6 +229,8 @@ int main(void)
 	bpf_link__destroy(link_execve);
 	bpf_link__destroy(link_openat);
 	bpf_link__destroy(link_connect);
+	bpf_link__destroy(link_execveat);
+	bpf_link__destroy(link_exit);
 	bpf_object__close(obj);
 
 	if (client_fd != -1)

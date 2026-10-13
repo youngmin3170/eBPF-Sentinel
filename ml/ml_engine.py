@@ -18,9 +18,9 @@ import torch
 import torch.nn as nn
 
 SOCKET_PATH    = "/tmp/sentinel.sock"
-SYSCALL_EXECVE  = 1
-SYSCALL_OPENAT  = 2
-SYSCALL_CONNECT = 3
+EVENT_EXECVE  = 1
+EVENT_OPENAT  = 2
+EVENT_CONNECT = 3
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 MODEL_FILE = os.path.join(MODELS_DIR, "model.pt")
@@ -41,7 +41,7 @@ class Event(ctypes.Structure):
     _fields_ = [
         ("pid",          ctypes.c_uint32),
         ("uid",          ctypes.c_uint32),
-        ("syscall_type", ctypes.c_uint32),
+        ("event_type", ctypes.c_uint32),
         ("comm",         ctypes.c_char * 16),
         ("filename",     ctypes.c_char * 64),
     ]
@@ -135,8 +135,8 @@ def run(sock, model, vocab):
             ev       = Event.from_buffer_copy(raw)
             comm     = ev.comm.decode("utf-8", "replace").rstrip("\x00")
             filename = ev.filename.decode("utf-8", "replace").rstrip("\x00")
-            syscall  = ("execve"  if ev.syscall_type == SYSCALL_EXECVE  else
-                        "connect" if ev.syscall_type == SYSCALL_CONNECT else
+            syscall  = ("execve"  if ev.event_type == EVENT_EXECVE  else
+                        "connect" if ev.event_type == EVENT_CONNECT else
                         "openat")
             token    = f"{syscall}:{filename}"
             pid      = ev.pid

@@ -4,10 +4,11 @@ LLVM_OBJDUMP := llvm-objdump-21
 
 KERNEL_DIR := ../kernel
 BUILD_DIR := ../build
+INCLUDE_DIR := ../include
 
-BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 -I$(KERNEL_DIR) -I/usr/include/bpf
+BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 -I$(KERNEL_DIR) -I$(INCLUDE_DIR) -I/usr/include/bpf
 
-CFLAGS := -Wall -Wextra -O2 -I/usr/include/bpf
+CFLAGS := -Wall -Wextra -O2 -I$(INCLUDE_DIR) -I/usr/include/bpf
 LDFLAGS := -L/usr/lib/x86_64-linux-gnu -lbpf -lelf -lz
 
 

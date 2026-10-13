@@ -8,16 +8,57 @@ from pathlib import Path
 
 import pytest
 
-SYSCALL_EXECVE = 1
+EVENT_EXECVE = 1
+EVENT_PROCESS_FORK = 6
+COMM_LEN = 16
+PATH_LEN = 64
+MAX_ARGS = 6
+ARG_LEN = 32
+NET_ADDR_LEN = 64
+
+class ExecEventData(ctypes.Structure):
+    _fields_ = [
+        ("filename", ctypes.c_char * PATH_LEN),
+        ("argc", ctypes.c_uint32),
+        ("args", (ctypes.c_char * ARG_LEN) * MAX_ARGS),
+    ]
+
+
+class FileEventData(ctypes.Structure):
+    _fields_ = [
+        ("filename", ctypes.c_char * PATH_LEN),
+    ]
+
+
+class NetworkEventData(ctypes.Structure):
+    _fields_ = [
+        ("address", ctypes.c_char * NET_ADDR_LEN),
+    ]
+
+class ProcessEventData(ctypes.Structure):
+    _fields_ = [
+        ("child_pid", ctypes.c_uint32)
+    ]
+
+
+class EventData(ctypes.Union):
+    _fields_ = [
+        ("exec", ExecEventData),
+        ("file", FileEventData),
+        ("network", NetworkEventData),
+        ("process", ProcessEventData),
+    ]
 
 
 class Event(ctypes.Structure):
     _fields_ = [
+        ("timestamp_ns", ctypes.c_uint64),
         ("pid", ctypes.c_uint32),
+        ("ppid", ctypes.c_uint32),
         ("uid", ctypes.c_uint32),
-        ("syscall_type", ctypes.c_uint32),
-        ("comm", ctypes.c_char * 16),
-        ("filename", ctypes.c_char * 64),
+        ("event_type", ctypes.c_uint32),
+        ("comm", ctypes.c_char * COMM_LEN),
+        ("data", EventData),
     ]
 
 EVENT_SIZE = ctypes.sizeof(Event)
@@ -37,7 +78,7 @@ def recv_exact(sock, size):
 
 
 def test_event_size():
-    assert EVENT_SIZE == 92
+    assert EVENT_SIZE == 304
 
 
 def test_execve_event():
@@ -75,27 +116,41 @@ def test_execve_event():
 
         time.sleep(0.1)
 
-        target = subprocess.Popen(["/usr/bin/true"])
+        expected_ppid = os.getpid()
+
+        target = subprocess.Popen(["/usr/bin/true", "sentinel-argv-test"])
+
         target_pid = target.pid
         target.wait()
 
-        found = False
+        matched_event = None
         deadline = time.time() + 3
 
         while time.time() < deadline:
             raw = recv_exact(client, EVENT_SIZE)
             event = Event.from_buffer_copy(raw)
 
-            if event.syscall_type == SYSCALL_EXECVE and event.pid == target_pid:
-                found = True
+            if event.event_type == EVENT_EXECVE and event.pid == target_pid:
+                matched_event = event
                 break
 
-        assert found, f"Did not receive execve event for PID {target_pid}"
+        assert matched_event is not None, (f"Did not receive execve event for PID {target_pid}")
+        assert matched_event.data.exec.argc == 2
+
+        arg0 = bytes(matched_event.data.exec.args[0]).split(b"\0", 1)[0]
+        arg1 = bytes(matched_event.data.exec.args[1]).split(b"\0", 1)[0]
+
+        assert arg0 == b"/usr/bin/true"
+        assert arg1 == b"sentinel-argv-test"
+
+        assert matched_event.ppid == expected_ppid, (
+            f"Expected PPID {expected_ppid}, "
+            f"got {matched_event.ppid}"
+        )
+
+        assert matched_event.timestamp_ns > 0
 
     finally:
-        if client is not None:
-            client.close()
-
         if sentinel.poll() is None:
             sentinel.send_signal(signal.SIGINT)
 
@@ -104,3 +159,6 @@ def test_execve_event():
             except subprocess.TimeoutExpired:
                 sentinel.kill()
                 sentinel.wait()
+
+        if client is not None:
+            client.close()
