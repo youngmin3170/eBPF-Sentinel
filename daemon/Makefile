@@ -28,12 +28,12 @@ $(BUILD_DIR)/vmlinux.h: | $(BUILD_DIR)
 	cp $@ $(KERNEL_DIR)/vmlinux.h
 
 # Compile sensor.c to BPF bytecode.
-$(BUILD_DIR)/sensor.o: $(KERNEL_DIR)/sensor.c $(BUILD_DIR)/vmlinux.h $(EVENT_HEADER)
+$(BUILD_DIR)/sensor.o: $(KERNEL_DIR)/sensor.c $(BUILD_DIR)/vmlinux.h $(EVENT_HEADER) | $(BUILD_DIR)
 	@echo "[*] Compiling sensor.c to sensor.o"
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 # Compile loader.c to native x86-64 binary.
-$(BUILD_DIR)/sentinel: loader.c $(EVENT_HEADER)
+$(BUILD_DIR)/sentinel: loader.c $(EVENT_HEADER) | $(BUILD_DIR)
 	@echo "[*] Compiling loader.c to sentinel"
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
