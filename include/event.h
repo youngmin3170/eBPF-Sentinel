@@ -31,12 +31,13 @@ struct network_event_data {
 
 struct process_event_data {
     __u32 child_pid;
+    __u32 child_tid;
 };
 
 struct event {
     __u64 timestamp_ns;
-
     __u32 pid;
+    __u32 tid;
     __u32 ppid;
     __u32 uid;
     __u32 event_type;

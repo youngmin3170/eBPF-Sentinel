@@ -34,7 +34,9 @@ static __always_inline void fill_common(struct event *e, u32 event_type)
 	e->timestamp_ns = bpf_ktime_get_ns();
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
+
     e->pid = pid_tgid >> 32;
+	e->tid = (__u32)pid_tgid;
 
     struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
 
@@ -204,6 +206,14 @@ int trace_process_exit(void *ctx)
 {
     (void)ctx;
 
+	u64 pid_tgid = bpf_get_current_pid_tgid();
+	u32 tgid = pid_tgid >> 32;
+	u32 tid = (__u32)pid_tgid;
+
+	if (tid != tgid) {
+    	return 0;
+	}
+
     struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) {
 		return 0;
@@ -218,20 +228,23 @@ int trace_process_exit(void *ctx)
     return 0;
 }
 
-SEC("tracepoint/sched/sched_process_fork")
-int trace_process_fork(struct trace_event_raw_sched_process_fork *ctx)
+SEC("tp_btf/sched_process_fork")
+int BPF_PROG(trace_process_fork, struct task_struct *parent, struct task_struct *child)
 {
     struct event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) {
-		return 0;
-	}
+        return 0;
+    }
 
     __builtin_memset(&e->data, 0, sizeof(e->data));
 
     fill_common(e, EVENT_PROCESS_FORK);
 
-    e->pid = ctx->parent_pid;
-    e->data.process.child_pid = ctx->child_pid;
+    e->pid = BPF_CORE_READ(parent, tgid);
+    e->tid = BPF_CORE_READ(parent, pid);
+
+    e->data.process.child_pid = BPF_CORE_READ(child, tgid);
+    e->data.process.child_tid = BPF_CORE_READ(child, pid);
 
     bpf_ringbuf_submit(e, 0);
     return 0;
